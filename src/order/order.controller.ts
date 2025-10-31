@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Param, Body, Query, UseGuards, UsePipes, ValidationPipe } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Param, Body, Query, UseGuards, UsePipes, ValidationPipe, UnauthorizedException, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBearerAuth, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { OrderService } from './order.service';
 import { CreateOrderDto } from './dto/create-order.dto';
@@ -33,18 +33,65 @@ export class OrderController {
         return this.orderService.createOrder(createOrderDto, user);
     }
 
+    @Get('userIds')
+    @Public()
+    @ApiOperation({ summary: 'Get all unique userIds from orders (Development Only)' })
+    @ApiResponse({ status: 200, description: 'UserIds retrieved successfully' })
+    async getUserIds() {
+        // Only in development mode
+        if (process.env.NODE_ENV !== 'development') {
+            throw new UnauthorizedException('This endpoint is only available in development mode');
+        }
+        return this.orderService.getUniqueUserIds();
+    }
+
     @Get()
     @Public()
     @UsePipes(new ValidationPipe({ transform: true }))
-    @ApiOperation({ summary: 'Get all orders with filtering and pagination' })
+    @ApiOperation({ summary: 'Get user orders with filtering and pagination' })
     @ApiResponse({ status: 200, description: 'Orders retrieved successfully' })
-    @ApiResponse({ status: 401, description: 'Unauthorized' })
+    @ApiResponse({ status: 401, description: 'Unauthorized - Authentication required' })
     @ApiResponse({ status: 403, description: 'Forbidden' })
     async getOrders(
         @Query() query: OrderQueryDto,
-        @CurrentUser() user: any
+        @CurrentUser() user: any,
+        @Req() req: any
     ) {
-        return this.orderService.getOrders(query, user);
+        console.log('📥 [GET /orders] Request received');
+        console.log('  Query params:', JSON.stringify(query));
+        console.log('  User:', user ? `ID: ${user.id}` : 'null');
+        console.log('  NODE_ENV:', process.env.NODE_ENV);
+
+        // Development mode: Allow testing with userId query param
+        // Priority: If userId is provided in query, use that for testing
+        if (process.env.NODE_ENV === 'development' && query.userId) {
+            // Create a mock user object for testing
+            const mockUser = {
+                id: query.userId,
+                email: `test${query.userId}@example.com`,
+                roles: ['user'],
+                permissions: [],
+            };
+            console.log('🔧 [Development] Using test mode with userId:', query.userId);
+            console.log('  Mock user created:', JSON.stringify(mockUser));
+            return this.orderService.getOrders(query, mockUser);
+        }
+
+        // If user is authenticated, use that user
+        if (user) {
+            console.log('✅ [Authenticated] User ID:', user.id);
+            return this.orderService.getOrders(query, user);
+        }
+
+        // No user and no userId in development - show helpful error
+        if (process.env.NODE_ENV === 'development') {
+            console.warn('⚠️ [Development] No user found and no userId query param');
+            console.warn('  Available query params:', Object.keys(query));
+            throw new UnauthorizedException('Authentication required or provide userId query param in development mode');
+        }
+
+        // Production: require authentication
+        throw new UnauthorizedException('Authentication required to view orders');
     }
 
     @Get(':id')

@@ -75,7 +75,7 @@ export class OrderService {
     }
 
     async getOrders(query: OrderQueryDto, user: any): Promise<{ orders: OrderResponseDto[]; total: number; page: number; limit: number }> {
-        this.logger.log(`Fetching orders for user ${user?.id} with query:`, query);
+        this.logger.log(`Fetching orders for user ${user?.id} with query:`, JSON.stringify(query));
 
         try {
             // Validate query
@@ -101,20 +101,25 @@ export class OrderService {
             const skip = (page - 1) * limit;
             const where: any = {};
 
-            // Apply user authorization
-            if (user) {
-                if (!user.roles?.includes('admin') && !user.roles?.includes('staff')) {
-                    // Regular users can only see their own orders
-                    where.userId = BigInt(user.id);
-                } else if (userId) {
-                    // Admin/staff can filter by specific user
-                    where.userId = BigInt(userId);
-                }
-            } else if (userId) {
-                // Public access with specific userId filter
-                where.userId = BigInt(userId);
+            // Apply user authorization - REQUIRED: user must be authenticated
+            if (!user) {
+                throw new BadRequestException('Authentication required to view orders');
             }
-            // If user is null and no userId filter, return all orders (public access)
+
+            // Filter by userId - Regular users can only see their own orders
+            if (!user.roles?.includes('admin') && !user.roles?.includes('staff')) {
+                // Regular users can only see their own orders
+                const userIdToFilter = user.id?.toString() || user.id;
+                where.userId = BigInt(userIdToFilter);
+                this.logger.log(`🔒 Filtering orders for regular user: ${userIdToFilter}`);
+            } else if (userId) {
+                // Admin/staff can filter by specific user if provided
+                where.userId = BigInt(userId);
+                this.logger.log(`👑 Admin/Staff filtering by userId: ${userId}`);
+            } else {
+                // Admin/staff without userId filter will see all orders (by design)
+                this.logger.log(`👑 Admin/Staff viewing all orders`);
+            }
 
             // Apply filters
             if (status) where.status = status;
@@ -132,6 +137,11 @@ export class OrderService {
                 ];
             }
 
+            // Log the where clause for debugging
+            this.logger.log(`📋 Database query where clause:`, JSON.stringify(where, (key, value) =>
+                typeof value === 'bigint' ? value.toString() : value
+            ));
+
             const [orders, total] = await Promise.all([
                 this.prismaService.order.findMany({
                     where,
@@ -148,6 +158,8 @@ export class OrderService {
                 }),
                 this.prismaService.order.count({ where }),
             ]);
+
+            this.logger.log(`✅ Found ${orders.length} orders (total: ${total}) for user ${user.id}`);
 
             return {
                 orders: orders.map(order => this.mapOrderToResponseDto(order)),
@@ -464,5 +476,47 @@ export class OrderService {
                 createdAt: refund.createdAt,
             })) || [],
         };
+    }
+
+    /**
+     * Get all unique userIds from orders (Development Only)
+     */
+    async getUniqueUserIds(): Promise<{ userIds: string[]; count: number; ordersPerUser: Array<{ userId: string; count: number }> }> {
+        try {
+            // Get distinct userIds from orders
+            const orders = await this.prisma.order.findMany({
+                select: {
+                    userId: true,
+                },
+                distinct: ['userId'],
+                orderBy: {
+                    userId: 'asc',
+                },
+            });
+
+            const userIds = orders.map((order) => order.userId.toString());
+            const uniqueUserIds = [...new Set(userIds)];
+
+            // Get order count per user
+            const ordersPerUser = await Promise.all(
+                uniqueUserIds.map(async (userId) => {
+                    const count = await this.prisma.order.count({
+                        where: {
+                            userId: BigInt(userId),
+                        },
+                    });
+                    return { userId, count };
+                })
+            );
+
+            return {
+                userIds: uniqueUserIds,
+                count: uniqueUserIds.length,
+                ordersPerUser,
+            };
+        } catch (error) {
+            this.logger.error('Error fetching unique userIds:', error);
+            throw new BadRequestException('Failed to fetch userIds');
+        }
     }
 }

@@ -112,11 +112,11 @@ async function bootstrap() {
             },
         });
 
-        logger.log(`📚 Swagger documentation available at http://localhost:${configService.get('PORT', 8001)}/api/docs`);
+        logger.log(`📚 Swagger documentation available at http://localhost:${configService.get('PORT', 8003)}/api/docs`);
     }
 
     // Start the application
-    const port = configService.get('PORT', 8001);
+    const port = configService.get('PORT', 8003);
     await app.listen(port);
 
     logger.log(`🚀 Order Management Service is running on port ${port}`);
